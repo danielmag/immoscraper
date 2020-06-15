@@ -1,0 +1,72 @@
+#!/usr/bin/ruby
+
+require 'net/http'
+require 'uri'
+require 'nokogiri'
+require 'json'
+
+immoscout_uri = URI('https://www.immobilienscout24.de/Suche/de/berlin/berlin/wohnung-mieten?numberofrooms=2.0-&price=-1100.0&livingspace=45.0-&geocodes=1276003001034,1276003001081,1276003001053,1276003001054,1276003001017,1276003001046,1276003001061,1276003001037&sorting=2&enteredFrom=result_list')
+ebay_uri = URI('https://www.ebay-kleinanzeigen.de/s-wohnung-mieten/berlin/preis::1100/c203l3331+wohnung_mieten.qm_d:46,+wohnung_mieten.zimmer_d:2,')
+dw_uri = URI('https://immo-api.deutsche-wohnen.com/estate/findByFilter')
+dw_post_attributes = {"infrastructure":{},"flatTypes":{},"other":{},"commercializationType":"rent","utilizationType":"flat","location":"Berlin","price":"1100","area":"46","rooms":"2","city":"Berlin"}.to_json
+
+seen = []
+wanted_locations = ['Mitte', 'Lichtenberg', 'Kreuzberg', 'Pankow', 'Friedrichshain', 'Prenzlauer', 'Schöneberg']
+$icon = "https://craftsmanfoundation.com/wp-content/uploads/2014/07/house-1024x1024.png"
+
+def notify(seen, path, base_url, text, immo)
+  seen << path
+  url = "#{base_url}#{path}"
+  puts ''
+  puts "#{text}: #{url}"
+  `terminal-notifier -message "#{text}" -title "#{immo}" -appIcon "#{$icon}" -open "#{url}"`
+end
+
+while true do
+  begin
+    immoscout_res = Net::HTTP.get(immoscout_uri)
+    immoscout_doc = Nokogiri::HTML(immoscout_res)
+    first_result_immoscout = immoscout_doc.at('.result-list-entry__brand-title-container')
+    path = first_result_immoscout['href']
+    if (!seen.include?(path))
+      text = first_result_immoscout.at('.result-list-entry__brand-title').text
+      notify(seen, path, 'https://www.immobilienscout24.de', text, 'Immoscout')
+    end
+
+
+    ebay_res = Net::HTTP.get(ebay_uri)
+    ebay_doc = Nokogiri::HTML(ebay_res)
+    results_ebay = ebay_doc.search('#srchrslt-adtable .aditem')
+    first_result_ebay = results_ebay.find do |node|
+      !(node.at('.aditem-main .text-module-begin a').text =~ /tausch/i) &&
+        wanted_locations.any? { |location| node.at('.aditem-details').text =~ /#{location}/i }
+    end&.at('.aditem-main .text-module-begin a')
+    if first_result_ebay
+      path = first_result_ebay['href']
+      if (!seen.include?(path))
+        text = first_result_ebay.text
+        notify(seen, path, 'https://www.ebay-kleinanzeigen.de', text, 'Ebay')
+      end
+    end
+
+    dw_res = Net::HTTP.post(URI(dw_uri), dw_post_attributes, "Content-Type" => "application/json")
+    results_dw = JSON.parse(dw_res.body)
+    first_result_dw = results_dw.find do |appt|
+      wanted_locations.any? { |location| appt['address']['district'] =~ /#{location}/i }
+    end
+    if first_result_dw
+      path = first_result_dw['id']
+      if (!seen.include?(path))
+        text = first_result_dw['title']
+        notify(seen, path, 'https://www.deutsche-wohnen.com/expose/object/', text, 'Deutsche Wohnen')
+      end
+    end
+
+    print '.'
+  rescue StandardError => e
+    puts ''
+    puts e.message
+    puts e.backtrace
+  end
+  sleep(20)
+end
