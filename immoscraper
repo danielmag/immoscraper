@@ -13,6 +13,7 @@ dw_post_attributes = {"infrastructure":{},"flatTypes":{},"other":{},"commerciali
 seen = []
 wanted_locations = ['Mitte', 'Lichtenberg', 'Kreuzberg', 'Pankow', 'Friedrichshain', 'Prenzlauer', 'Schöneberg']
 $icon = "https://craftsmanfoundation.com/wp-content/uploads/2014/07/house-1024x1024.png"
+check_number = 4
 
 def notify(seen, path, base_url, text, immo)
   seen << path
@@ -26,38 +27,40 @@ while true do
   begin
     immoscout_res = Net::HTTP.get(immoscout_uri)
     immoscout_doc = Nokogiri::HTML(immoscout_res)
-    first_result_immoscout = immoscout_doc.at('.result-list-entry__brand-title-container')
-    path = first_result_immoscout['href']
-    if (!seen.include?(path))
-      text = first_result_immoscout.at('.result-list-entry__brand-title').text
-      notify(seen, path, 'https://www.immobilienscout24.de', text, 'Immoscout')
+    results_immoscout = immoscout_doc.search('.result-list-entry__brand-title-container')
+    results_immoscout.first(check_number).each do |result|
+      path = result['href']
+      if (!seen.include?(path))
+        text = result.at('.result-list-entry__brand-title').text.gsub(/^NEU/, '')
+        notify(seen, path, 'https://www.immobilienscout24.de', text, 'Immoscout')
+      end
     end
 
 
     ebay_res = Net::HTTP.get(ebay_uri)
     ebay_doc = Nokogiri::HTML(ebay_res)
     results_ebay = ebay_doc.search('#srchrslt-adtable .aditem')
-    first_result_ebay = results_ebay.find do |node|
+    filtered_results = results_ebay.select do |node|
       !(node.at('.aditem-main .text-module-begin a').text =~ /tausch/i) &&
         wanted_locations.any? { |location| node.at('.aditem-details').text =~ /#{location}/i }
-    end&.at('.aditem-main .text-module-begin a')
-    if first_result_ebay
-      path = first_result_ebay['href']
+    end.map { |res| res.at('.aditem-main .text-module-begin a') }
+    filtered_results.first(check_number).each do |result|
+      path = result['href']
       if (!seen.include?(path))
-        text = first_result_ebay.text
+        text = result.text
         notify(seen, path, 'https://www.ebay-kleinanzeigen.de', text, 'Ebay')
       end
     end
 
     dw_res = Net::HTTP.post(URI(dw_uri), dw_post_attributes, "Content-Type" => "application/json")
     results_dw = JSON.parse(dw_res.body)
-    first_result_dw = results_dw.find do |appt|
+    filtered_results = results_dw.select do |appt|
       wanted_locations.any? { |location| appt['address']['district'] =~ /#{location}/i }
     end
-    if first_result_dw
-      path = first_result_dw['id']
+    filtered_results.first(check_number).each do |result|
+      path = result['id']
       if (!seen.include?(path))
-        text = first_result_dw['title']
+        text = result['title']
         notify(seen, path, 'https://www.deutsche-wohnen.com/expose/object/', text, 'Deutsche Wohnen')
       end
     end
